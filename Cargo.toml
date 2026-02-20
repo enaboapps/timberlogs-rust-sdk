@@ -1,0 +1,24 @@
+[package]
+name = "timberlogs"
+version = "0.1.0"
+edition = "2021"
+authors = ["enaboapps"]
+description = "Rust SDK for Timberlogs - structured logging made simple"
+license = "MIT"
+repository = "https://github.com/enaboapps/timberlogs-rust-sdk"
+homepage = "https://github.com/enaboapps/timberlogs-rust-sdk"
+readme = "README.md"
+keywords = ["logging", "structured-logging", "timberlogs", "observability"]
+categories = ["development-tools::debugging"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time", "sync"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1"
