@@ -3,7 +3,7 @@ use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
 use crate::error::TimberlogsError;
-use crate::types::{BatchPayload, CreateLogArgs, Environment, FlowResponse, IngestResponse, LogEntry, LogLevel};
+use crate::types::{BatchPayload, CreateLogArgs, Environment, FlowResponse, IngestRawOptions, IngestResponse, LogEntry, LogLevel, RawFormat};
 
 const TIMBERLOGS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/logs";
 const TIMBERLOGS_FLOWS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/flows";
@@ -302,6 +302,78 @@ impl TimberlogsClient {
             step_index: 0,
             client: self,
         })
+    }
+
+    pub async fn ingest_raw(
+        &self,
+        body: impl Into<String>,
+        format: RawFormat,
+        options: Option<IngestRawOptions>,
+    ) -> Result<(), TimberlogsError> {
+        let body = body.into();
+        let opts = options.unwrap_or_default();
+
+        let mut url = format!("{}?format={}", TIMBERLOGS_ENDPOINT, format.as_str());
+        if let Some(ref source) = opts.source {
+            url.push_str(&format!("&source={}", urlencoding::encode(source)));
+        }
+        if let Some(env) = opts.environment {
+            let env_str = serde_json::to_value(env)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+            url.push_str(&format!("&environment={}", urlencoding::encode(&env_str)));
+        }
+        if let Some(level) = opts.level {
+            let level_str = serde_json::to_value(level)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+            url.push_str(&format!("&level={}", urlencoding::encode(&level_str)));
+        }
+        if let Some(ref dataset) = opts.dataset {
+            url.push_str(&format!("&dataset={}", urlencoding::encode(dataset)));
+        }
+
+        let http = {
+            let inner = self.inner.lock().await;
+            inner.http.clone()
+        };
+
+        let retry = &self.config.retry;
+        let mut last_error = None;
+        let mut delay = retry.initial_delay_ms;
+
+        for attempt in 0..=retry.max_retries {
+            let result = http
+                .post(&url)
+                .header("Content-Type", format.content_type())
+                .header("X-API-Key", &self.config.api_key)
+                .body(body.clone())
+                .send()
+                .await;
+
+            match result {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        return Ok(());
+                    }
+                    let status = response.status().as_u16();
+                    let resp_body = response.text().await.unwrap_or_default();
+                    last_error = Some(TimberlogsError::Http { status, body: resp_body });
+                }
+                Err(e) => {
+                    last_error = Some(TimberlogsError::Request(e));
+                }
+            }
+
+            if attempt < retry.max_retries {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay = (delay * 2).min(retry.max_delay_ms);
+            }
+        }
+
+        Err(last_error.unwrap())
     }
 
     pub async fn flush(&self) -> Result<(), TimberlogsError> {
