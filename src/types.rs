@@ -88,3 +88,10 @@ pub(crate) struct IngestResponse {
     #[allow(dead_code)]
     pub count: u32,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FlowResponse {
+    pub flow_id: String,
+    pub name: String,
+}

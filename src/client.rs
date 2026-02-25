@@ -3,9 +3,10 @@ use tokio::sync::Mutex;
 use tokio::time::{interval, Duration};
 
 use crate::error::TimberlogsError;
-use crate::types::{BatchPayload, CreateLogArgs, Environment, IngestResponse, LogEntry, LogLevel};
+use crate::types::{BatchPayload, CreateLogArgs, Environment, FlowResponse, IngestResponse, LogEntry, LogLevel};
 
 const TIMBERLOGS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/logs";
+const TIMBERLOGS_FLOWS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/flows";
 
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 5000;
@@ -273,6 +274,36 @@ impl TimberlogsClient {
         Ok(())
     }
 
+    pub async fn flow(&self, name: impl Into<String>) -> Result<Flow<'_>, TimberlogsError> {
+        let name = name.into();
+        let http = {
+            let inner = self.inner.lock().await;
+            inner.http.clone()
+        };
+
+        let response = http
+            .post(TIMBERLOGS_FLOWS_ENDPOINT)
+            .header("Content-Type", "application/json")
+            .header("X-API-Key", &self.config.api_key)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(TimberlogsError::Http { status, body });
+        }
+
+        let data: FlowResponse = response.json().await?;
+        Ok(Flow {
+            id: data.flow_id,
+            name: data.name,
+            step_index: 0,
+            client: self,
+        })
+    }
+
     pub async fn flush(&self) -> Result<(), TimberlogsError> {
         flush_batch(&self.config, &self.inner).await
     }
@@ -290,6 +321,72 @@ impl Drop for TimberlogsClient {
         if let Some(handle) = self.flush_handle.take() {
             handle.abort();
         }
+    }
+}
+
+pub struct Flow<'a> {
+    pub id: String,
+    pub name: String,
+    step_index: u32,
+    client: &'a TimberlogsClient,
+}
+
+impl<'a> Flow<'a> {
+    pub async fn debug(
+        &mut self,
+        message: impl Into<String>,
+        data: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<&mut Self, TimberlogsError> {
+        self.log_with_level(LogLevel::Debug, message, data, None).await
+    }
+
+    pub async fn info(
+        &mut self,
+        message: impl Into<String>,
+        data: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<&mut Self, TimberlogsError> {
+        self.log_with_level(LogLevel::Info, message, data, None).await
+    }
+
+    pub async fn warn(
+        &mut self,
+        message: impl Into<String>,
+        data: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<&mut Self, TimberlogsError> {
+        self.log_with_level(LogLevel::Warn, message, data, None).await
+    }
+
+    pub async fn error(
+        &mut self,
+        message: impl Into<String>,
+        data: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<&mut Self, TimberlogsError> {
+        self.log_with_level(LogLevel::Error, message, data, None).await
+    }
+
+    pub async fn log_with_level(
+        &mut self,
+        level: LogLevel,
+        message: impl Into<String>,
+        data: Option<std::collections::HashMap<String, serde_json::Value>>,
+        tags: Option<Vec<String>>,
+    ) -> Result<&mut Self, TimberlogsError> {
+        let step = self.step_index;
+        self.step_index += 1;
+
+        self.client
+            .log(LogEntry {
+                level,
+                message: message.into(),
+                data,
+                tags,
+                flow_id: Some(self.id.clone()),
+                step_index: Some(step),
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(self)
     }
 }
 
