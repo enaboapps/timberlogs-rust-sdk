@@ -95,3 +95,45 @@ pub(crate) struct FlowResponse {
     pub flow_id: String,
     pub name: String,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawFormat {
+    Json,
+    Jsonl,
+    Syslog,
+    Text,
+    Csv,
+    Obl,
+}
+
+impl RawFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RawFormat::Json => "json",
+            RawFormat::Jsonl => "jsonl",
+            RawFormat::Syslog => "syslog",
+            RawFormat::Text => "text",
+            RawFormat::Csv => "csv",
+            RawFormat::Obl => "obl",
+        }
+    }
+
+    pub fn content_type(&self) -> &'static str {
+        match self {
+            RawFormat::Json => "application/json",
+            RawFormat::Jsonl => "application/x-ndjson",
+            RawFormat::Syslog => "application/x-syslog",
+            RawFormat::Text => "text/plain",
+            RawFormat::Csv => "text/csv",
+            RawFormat::Obl => "application/x-obl",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct IngestRawOptions {
+    pub source: Option<String>,
+    pub environment: Option<Environment>,
+    pub level: Option<LogLevel>,
+    pub dataset: Option<String>,
+}
