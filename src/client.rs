@@ -30,6 +30,8 @@ impl Default for RetryConfig {
     }
 }
 
+pub type ErrorCallback = Box<dyn Fn(&TimberlogsError) + Send + Sync>;
+
 pub struct TimberlogsConfig {
     pub source: String,
     pub environment: Environment,
@@ -42,6 +44,7 @@ pub struct TimberlogsConfig {
     pub flush_interval_ms: Option<u64>,
     pub min_level: Option<LogLevel>,
     pub retry: Option<RetryConfig>,
+    pub on_error: Option<ErrorCallback>,
 }
 
 impl Default for TimberlogsConfig {
@@ -58,6 +61,7 @@ impl Default for TimberlogsConfig {
             flush_interval_ms: None,
             min_level: None,
             retry: None,
+            on_error: None,
         }
     }
 }
@@ -84,6 +88,7 @@ struct ClientConfig {
     batch_size: usize,
     min_level: LogLevel,
     retry: RetryConfig,
+    on_error: Option<ErrorCallback>,
 }
 
 fn validate_entry(entry: &LogEntry) -> Result<(), TimberlogsError> {
@@ -137,6 +142,7 @@ impl TimberlogsClient {
             batch_size: config.batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
             min_level: config.min_level.unwrap_or(LogLevel::Debug),
             retry: config.retry.unwrap_or_default(),
+            on_error: config.on_error,
         });
 
         let inner = Arc::new(Mutex::new(ClientInner {
@@ -154,7 +160,11 @@ impl TimberlogsClient {
             let mut ticker = interval(Duration::from_millis(flush_interval));
             loop {
                 ticker.tick().await;
-                let _ = flush_batch(&flush_config, &flush_inner).await;
+                if let Err(e) = flush_batch(&flush_config, &flush_inner).await {
+                    if let Some(ref cb) = flush_config.on_error {
+                        cb(&e);
+                    }
+                }
             }
         });
 
