@@ -1,0 +1,388 @@
+---
+title: Rust SDK
+description: The official Timberlogs SDK for Rust applications.
+---
+
+## Installation
+
+```toml
+[dependencies]
+timberlogs = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+## Basic Usage
+
+```rust
+use timberlogs::{TimberlogsClient, TimberlogsConfig, Environment};
+
+#[tokio::main]
+async fn main() {
+    let mut client = TimberlogsClient::new(TimberlogsConfig {
+        source: "my-app".into(),
+        environment: Environment::Production,
+        api_key: std::env::var("TIMBER_API_KEY").unwrap(),
+        ..Default::default()
+    });
+
+    client.info("Hello, Timberlogs!", None).await.unwrap();
+
+    client.disconnect().await.unwrap();
+}
+```
+
+## Exports
+
+The crate exports the following:
+
+```rust
+use timberlogs::{
+    TimberlogsClient,    // Client struct
+    TimberlogsConfig,    // Configuration struct
+    RetryConfig,         // Retry configuration
+    Flow,                // Flow struct for tracking
+    LogEntry,            // Log entry struct
+    LogLevel,            // Debug, Info, Warn, Error
+    Environment,         // Development, Staging, Production
+    RawFormat,           // Json, Jsonl, Syslog, Text, Csv, Obl
+    IngestRawOptions,    // Options for ingest_raw()
+    TimberlogsError,     // Error enum
+};
+```
+
+## Logging Methods
+
+### `debug(message, data)`
+
+Log debug-level messages for detailed diagnostic information.
+
+```rust
+// Simple debug
+client.debug("Cache lookup", None).await?;
+
+// With data
+let mut data = HashMap::new();
+data.insert("key".into(), json!("user:123"));
+data.insert("ttl".into(), json!(3600));
+client.debug("Cache hit", Some(data)).await?;
+```
+
+### `info(message, data)`
+
+Log informational messages about normal operations.
+
+```rust
+let mut data = HashMap::new();
+data.insert("user_id".into(), json!("user_123"));
+data.insert("method".into(), json!("oauth"));
+client.info("User signed in", Some(data)).await?;
+```
+
+### `warn(message, data)`
+
+Log warning conditions that might indicate a problem.
+
+```rust
+let mut data = HashMap::new();
+data.insert("current".into(), json!(950));
+data.insert("limit".into(), json!(1000));
+client.warn("Rate limit approaching", Some(data)).await?;
+```
+
+### `error(message, data)`
+
+Log errors.
+
+```rust
+let mut data = HashMap::new();
+data.insert("field".into(), json!("email"));
+data.insert("reason".into(), json!("Invalid format"));
+client.error("Validation failed", Some(data)).await?;
+```
+
+### `log(entry)`
+
+Low-level logging method with full control over the log entry.
+
+```rust
+client.log(LogEntry {
+    level: LogLevel::Info,
+    message: "Custom log entry".into(),
+    data: Some(HashMap::from([
+        ("custom".into(), json!("data")),
+    ])),
+    user_id: Some("user_123".into()),
+    session_id: Some("sess_abc".into()),
+    request_id: Some("req_xyz".into()),
+    tags: Some(vec!["important".into(), "billing".into()]),
+    ..Default::default()
+}).await?;
+```
+
+### Error Handling
+
+All async methods return `Result<(), TimberlogsError>`:
+
+```rust
+use timberlogs::TimberlogsError;
+
+match client.info("test", None).await {
+    Ok(()) => {},
+    Err(TimberlogsError::Validation(msg)) => eprintln!("Invalid: {msg}"),
+    Err(TimberlogsError::Http { status, body }) => eprintln!("HTTP {status}: {body}"),
+    Err(TimberlogsError::Request(e)) => eprintln!("Network error: {e}"),
+    Err(e) => eprintln!("Other: {e}"),
+}
+```
+
+### Data Object
+
+The `data` parameter accepts `Option<HashMap<String, serde_json::Value>>`:
+
+```rust
+use std::collections::HashMap;
+use serde_json::json;
+
+let data = HashMap::from([
+    ("status".into(), json!(200)),
+    ("duration".into(), json!(123.45)),
+    ("cached".into(), json!(true)),
+    ("user".into(), json!({"id": "user_123", "role": "admin"})),
+    ("permissions".into(), json!(["read", "write", "delete"])),
+]);
+
+client.info("Request completed", Some(data)).await?;
+```
+
+### Tags
+
+Tags help categorize and filter logs. Add them via the `LogEntry`:
+
+```rust
+client.log(LogEntry {
+    level: LogLevel::Info,
+    message: "Payment processed".into(),
+    tags: Some(vec!["payments".into(), "success".into()]),
+    ..Default::default()
+}).await?;
+```
+
+## Flow Tracking
+
+Flows group related logs across a multi-step process with automatic flow IDs and step indexing.
+
+### Creating a Flow
+
+Use the `flow()` method to create a new flow. This is an async operation that creates the flow on the server:
+
+```rust
+let mut flow = client.flow("checkout").await?;
+
+flow.info("Started checkout", None).await?;
+flow.info("Validated cart", Some(HashMap::from([
+    ("items".into(), json!(3)),
+]))).await?;
+flow.info("Payment processed", Some(HashMap::from([
+    ("amount".into(), json!(99.99)),
+]))).await?;
+flow.info("Order confirmed", None).await?;
+```
+
+Each log is automatically tagged with:
+- `flow_id` (server-generated)
+- `step_index: 0, 1, 2, 3` (auto-incrementing)
+
+### Flow Properties
+
+```rust
+let flow = client.flow("user-onboarding").await?;
+
+println!("{}", flow.id);          // "user-onboarding-x7y8z9a0"
+println!("{}", flow.name);        // "user-onboarding"
+println!("{}", flow.step_index()); // 0
+```
+
+### Flow Logging Methods
+
+Flows have the same logging methods as the main client:
+
+```rust
+let mut flow = client.flow("data-pipeline").await?;
+
+flow.debug("Debug info", None).await?;
+flow.info("Processing started", None).await?;
+flow.warn("Slow operation", Some(HashMap::from([
+    ("duration".into(), json!(5000)),
+]))).await?;
+flow.error("Processing failed", None).await?;
+```
+
+### Custom Level and Tags
+
+Use `log_with_level` for full control:
+
+```rust
+flow.log_with_level(
+    LogLevel::Info,
+    "Step complete",
+    Some(HashMap::from([("stage".into(), json!("init"))])),
+    Some(vec!["pipeline".into()]),
+).await?;
+```
+
+### Level Filtering with Flows
+
+When using `min_level` configuration, filtered logs don't increment the step index:
+
+```rust
+let client = TimberlogsClient::new(TimberlogsConfig {
+    min_level: Some(LogLevel::Info),
+    ..Default::default()
+});
+
+let mut flow = client.flow("example").await?;
+flow.debug("Not sent", None).await?;   // Filtered, step_index not incremented
+flow.info("First log", None).await?;   // step_index: 0
+flow.debug("Not sent", None).await?;   // Filtered, step_index not incremented
+flow.info("Second log", None).await?;  // step_index: 1
+```
+
+This ensures your step indices remain sequential without gaps.
+
+## Raw Format Ingestion
+
+Send pre-formatted log data directly to the ingestion endpoint, bypassing the structured log pipeline.
+
+### `ingest_raw(body, format, options)`
+
+```rust
+use timberlogs::{RawFormat, IngestRawOptions};
+
+client.ingest_raw(
+    "<165>1 2024-01-15T10:30:00.000Z myhost api 1234 - - Connection refused",
+    RawFormat::Syslog,
+    Some(IngestRawOptions {
+        source: Some("syslog-relay".into()),
+        environment: Some(Environment::Production),
+        ..Default::default()
+    }),
+).await?;
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `body` | `impl Into<String>` | The raw log data |
+| `format` | `RawFormat` | One of `Json`, `Jsonl`, `Syslog`, `Text`, `Csv`, `Obl` |
+| `options` | `Option<IngestRawOptions>` | Optional defaults for `source`, `environment`, `level`, `dataset` |
+
+### Examples
+
+**CSV:**
+
+```rust
+client.ingest_raw(
+    "level,message,source\nerror,Connection refused,api\ninfo,Request completed,api",
+    RawFormat::Csv,
+    Some(IngestRawOptions {
+        environment: Some(Environment::Production),
+        ..Default::default()
+    }),
+).await?;
+```
+
+**JSONL:**
+
+```rust
+client.ingest_raw(
+    "{\"level\":\"info\",\"message\":\"line 1\"}\n{\"level\":\"error\",\"message\":\"line 2\"}",
+    RawFormat::Jsonl,
+    None,
+).await?;
+```
+
+**Plain text:**
+
+```rust
+client.ingest_raw(
+    "2024-01-15 10:30:00 ERROR Connection refused\n2024-01-15 10:30:01 INFO Retrying...",
+    RawFormat::Text,
+    Some(IngestRawOptions {
+        source: Some("nginx".into()),
+        environment: Some(Environment::Production),
+        ..Default::default()
+    }),
+).await?;
+```
+
+### Supported Formats
+
+| Format | Content-Type | Description |
+|--------|-------------|-------------|
+| `Json` | `application/json` | JSON array or object |
+| `Jsonl` | `application/x-ndjson` | One JSON object per line |
+| `Syslog` | `application/x-syslog` | RFC 5424 / RFC 3164 |
+| `Text` | `text/plain` | One log per line |
+| `Csv` | `text/csv` | Header row + data rows |
+| `Obl` | `application/x-obl` | Open Board Logging |
+
+## Client Methods
+
+### `set_user_id(user_id)`
+
+Set the default user ID for subsequent logs.
+
+```rust
+client.set_user_id(Some("user_123".into())).await;
+```
+
+### `set_session_id(session_id)`
+
+Set the default session ID for subsequent logs.
+
+```rust
+client.set_session_id(Some("sess_abc".into())).await;
+```
+
+### `flush()`
+
+Immediately send all queued logs.
+
+```rust
+client.flush().await?;
+```
+
+### `disconnect()`
+
+Flush logs and stop the auto-flush timer. Always call this before your application exits.
+
+```rust
+client.disconnect().await?;
+```
+
+## Log Entry Struct
+
+```rust
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub message: String,
+    pub data: Option<HashMap<String, serde_json::Value>>,
+    pub user_id: Option<String>,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+    pub error_name: Option<String>,
+    pub error_stack: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub flow_id: Option<String>,
+    pub step_index: Option<u32>,
+    pub dataset: Option<String>,
+    pub timestamp: Option<u64>,      // Unix ms, defaults to now
+    pub ip_address: Option<String>,
+    pub country: Option<String>,
+}
+```
+
+<Tip>
+Ready to start logging? [Sign up free](https://app.timberlogs.dev) — send your first log in under 5 minutes.
+</Tip>
