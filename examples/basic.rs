@@ -7,13 +7,7 @@ async fn main() {
         environment: Environment::Development,
         api_key: std::env::var("TIMBERLOGS_API_KEY").expect("TIMBERLOGS_API_KEY required"),
         version: Some("0.1.0".into()),
-        user_id: None,
-        session_id: None,
-        dataset: None,
-        batch_size: None,
-        flush_interval_ms: None,
-        min_level: None,
-        retry: None,
+        ..Default::default()
     });
 
     client.info("Server started", None).await.unwrap();
