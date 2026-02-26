@@ -269,6 +269,9 @@ impl TimberlogsClient {
             flow_id: entry.flow_id,
             step_index: entry.step_index,
             dataset: entry.dataset.or_else(|| self.config.dataset.clone()),
+            timestamp: entry.timestamp,
+            ip_address: entry.ip_address,
+            country: entry.country,
         };
 
         let should_flush = {
@@ -559,6 +562,9 @@ impl Default for LogEntry {
             flow_id: None,
             step_index: None,
             dataset: None,
+            timestamp: None,
+            ip_address: None,
+            country: None,
         }
     }
 }
