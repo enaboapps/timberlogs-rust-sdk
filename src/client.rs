@@ -5,8 +5,9 @@ use tokio::time::{interval, Duration};
 use crate::error::TimberlogsError;
 use crate::types::{BatchPayload, CreateLogArgs, Environment, FlowResponse, IngestRawOptions, IngestResponse, LogEntry, LogLevel, RawFormat};
 
-const TIMBERLOGS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/logs";
-const TIMBERLOGS_FLOWS_ENDPOINT: &str = "https://timberlogs-ingest.enaboapps.workers.dev/v1/flows";
+const DEFAULT_BASE_URL: &str = "https://timberlogs-ingest.enaboapps.workers.dev";
+const LOGS_PATH: &str = "/v1/logs";
+const FLOWS_PATH: &str = "/v1/flows";
 
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 5000;
@@ -45,6 +46,8 @@ pub struct TimberlogsConfig {
     pub min_level: Option<LogLevel>,
     pub retry: Option<RetryConfig>,
     pub on_error: Option<ErrorCallback>,
+    #[doc(hidden)]
+    pub base_url: Option<String>,
 }
 
 impl Default for TimberlogsConfig {
@@ -62,6 +65,7 @@ impl Default for TimberlogsConfig {
             min_level: None,
             retry: None,
             on_error: None,
+            base_url: None,
         }
     }
 }
@@ -89,6 +93,7 @@ struct ClientConfig {
     min_level: LogLevel,
     retry: RetryConfig,
     on_error: Option<ErrorCallback>,
+    base_url: String,
 }
 
 fn check_str(value: Option<&str>, name: &str, max_len: usize) -> Result<(), TimberlogsError> {
@@ -164,6 +169,7 @@ impl TimberlogsClient {
             min_level: config.min_level.unwrap_or(LogLevel::Debug),
             retry: config.retry.unwrap_or_default(),
             on_error: config.on_error,
+            base_url: config.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
         });
 
         let inner = Arc::new(Mutex::new(ClientInner {
@@ -315,8 +321,9 @@ impl TimberlogsClient {
             inner.http.clone()
         };
 
+        let flows_url = format!("{}{}", self.config.base_url, FLOWS_PATH);
         let response = http
-            .post(TIMBERLOGS_FLOWS_ENDPOINT)
+            .post(&flows_url)
             .header("Content-Type", "application/json")
             .header("X-API-Key", &self.config.api_key)
             .json(&serde_json::json!({ "name": name }))
@@ -347,7 +354,8 @@ impl TimberlogsClient {
         let body = body.into();
         let opts = options.unwrap_or_default();
 
-        let mut url = format!("{}?format={}", TIMBERLOGS_ENDPOINT, format.as_str());
+        let logs_url = format!("{}{}", self.config.base_url, LOGS_PATH);
+        let mut url = format!("{}?format={}", logs_url, format.as_str());
         if let Some(ref source) = opts.source {
             url.push_str(&format!("&source={}", urlencoding::encode(source)));
         }
@@ -510,7 +518,7 @@ async fn flush_batch(
         (logs, http)
     };
 
-    match send_batch(&http, &config.api_key, &config.retry, &logs).await {
+    match send_batch(&http, &config.base_url, &config.api_key, &config.retry, &logs).await {
         Ok(()) => Ok(()),
         Err(e) => {
             let mut guard = inner.lock().await;
@@ -524,6 +532,7 @@ async fn flush_batch(
 
 async fn send_batch(
     http: &reqwest::Client,
+    base_url: &str,
     api_key: &str,
     retry: &RetryConfig,
     logs: &[CreateLogArgs],
@@ -532,12 +541,13 @@ async fn send_batch(
         logs: logs.to_vec(),
     };
 
+    let url = format!("{}{}", base_url, LOGS_PATH);
     let mut last_error = None;
     let mut delay = retry.initial_delay_ms;
 
     for attempt in 0..=retry.max_retries {
         let result = http
-            .post(TIMBERLOGS_ENDPOINT)
+            .post(&url)
             .header("Content-Type", "application/json")
             .header("X-API-Key", api_key)
             .json(&payload)
