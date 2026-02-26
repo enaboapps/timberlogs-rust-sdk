@@ -91,6 +91,18 @@ struct ClientConfig {
     on_error: Option<ErrorCallback>,
 }
 
+fn check_str(value: Option<&str>, name: &str, max_len: usize) -> Result<(), TimberlogsError> {
+    if let Some(v) = value {
+        if v.len() > max_len {
+            return Err(TimberlogsError::Validation(format!(
+                "{name} exceeds {max_len} characters: {}",
+                v.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_entry(entry: &LogEntry) -> Result<(), TimberlogsError> {
     if entry.message.is_empty() {
         return Err(TimberlogsError::Validation(
@@ -103,6 +115,15 @@ fn validate_entry(entry: &LogEntry) -> Result<(), TimberlogsError> {
             entry.message.len()
         )));
     }
+    check_str(entry.user_id.as_deref(), "user_id", 100)?;
+    check_str(entry.session_id.as_deref(), "session_id", 100)?;
+    check_str(entry.request_id.as_deref(), "request_id", 100)?;
+    check_str(entry.error_name.as_deref(), "error_name", 200)?;
+    check_str(entry.error_stack.as_deref(), "error_stack", 10_000)?;
+    check_str(entry.flow_id.as_deref(), "flow_id", 100)?;
+    check_str(entry.dataset.as_deref(), "dataset", 50)?;
+    check_str(entry.ip_address.as_deref(), "ip_address", 100)?;
+    check_str(entry.country.as_deref(), "country", 10)?;
     if let Some(ref tags) = entry.tags {
         if tags.len() > 20 {
             return Err(TimberlogsError::Validation(format!(
