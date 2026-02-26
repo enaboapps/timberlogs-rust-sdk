@@ -6,7 +6,7 @@ Rust SDK for [Timberlogs](https://timberlogs.dev) — structured logging made si
 
 ```toml
 [dependencies]
-timberlogs = "0.1"
+timberlogs = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

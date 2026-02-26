@@ -1,6 +1,6 @@
 [package]
 name = "timberlogs"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["enaboapps"]
 description = "Rust SDK for Timberlogs - structured logging made simple"
