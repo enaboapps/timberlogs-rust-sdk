@@ -125,7 +125,7 @@ fn validate_entry(entry: &LogEntry) -> Result<(), TimberlogsError> {
     check_str(entry.request_id.as_deref(), "request_id", 100)?;
     check_str(entry.error_name.as_deref(), "error_name", 200)?;
     check_str(entry.error_stack.as_deref(), "error_stack", 10_000)?;
-    check_str(entry.flow_id.as_deref(), "flow_id", 100)?;
+    check_str(entry.flow_id.as_deref(), "flow_id", 50)?;
     check_str(entry.dataset.as_deref(), "dataset", 50)?;
     check_str(entry.ip_address.as_deref(), "ip_address", 100)?;
     check_str(entry.country.as_deref(), "country", 10)?;
@@ -157,6 +157,9 @@ fn validate_entry(entry: &LogEntry) -> Result<(), TimberlogsError> {
 
 impl TimberlogsClient {
     pub fn new(config: TimberlogsConfig) -> Self {
+        let batch_size = config.batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+        assert!(batch_size > 0, "batch_size must be greater than 0");
+
         let client_config = Arc::new(ClientConfig {
             source: config.source,
             environment: config.environment,
@@ -165,7 +168,7 @@ impl TimberlogsClient {
             user_id: Mutex::new(config.user_id),
             session_id: Mutex::new(config.session_id),
             dataset: config.dataset,
-            batch_size: config.batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
+            batch_size,
             min_level: config.min_level.unwrap_or(LogLevel::Debug),
             retry: config.retry.unwrap_or_default(),
             on_error: config.on_error,
@@ -177,28 +180,32 @@ impl TimberlogsClient {
             http: reqwest::Client::new(),
         }));
 
-        let flush_interval = config
-            .flush_interval_ms
-            .unwrap_or(DEFAULT_FLUSH_INTERVAL_MS);
+        let flush_handle = if !client_config.api_key.is_empty() {
+            let flush_interval = config
+                .flush_interval_ms
+                .unwrap_or(DEFAULT_FLUSH_INTERVAL_MS);
 
-        let flush_config = Arc::clone(&client_config);
-        let flush_inner = Arc::clone(&inner);
-        let flush_handle = tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_millis(flush_interval));
-            loop {
-                ticker.tick().await;
-                if let Err(e) = flush_batch(&flush_config, &flush_inner).await {
-                    if let Some(ref cb) = flush_config.on_error {
-                        cb(&e);
+            let flush_config = Arc::clone(&client_config);
+            let flush_inner = Arc::clone(&inner);
+            Some(tokio::spawn(async move {
+                let mut ticker = interval(Duration::from_millis(flush_interval));
+                loop {
+                    ticker.tick().await;
+                    if let Err(e) = flush_batch(&flush_config, &flush_inner).await {
+                        if let Some(ref cb) = flush_config.on_error {
+                            cb(&e);
+                        }
                     }
                 }
-            }
-        });
+            }))
+        } else {
+            None
+        };
 
         Self {
             config: client_config,
             inner,
-            flush_handle: Some(flush_handle),
+            flush_handle,
         }
     }
 
@@ -446,6 +453,10 @@ pub struct Flow<'a> {
 }
 
 impl<'a> Flow<'a> {
+    pub fn step_index(&self) -> u32 {
+        self.step_index
+    }
+
     pub async fn debug(
         &mut self,
         message: impl Into<String>,
@@ -485,6 +496,10 @@ impl<'a> Flow<'a> {
         data: Option<std::collections::HashMap<String, serde_json::Value>>,
         tags: Option<Vec<String>>,
     ) -> Result<&mut Self, TimberlogsError> {
+        if level < self.client.config.min_level {
+            return Ok(self);
+        }
+
         let step = self.step_index;
         self.step_index += 1;
 

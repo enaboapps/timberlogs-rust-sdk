@@ -313,7 +313,7 @@ async fn test_validation_error_stack_too_long() {
 
 #[tokio::test]
 async fn test_validation_flow_id_too_long() {
-    assert_field_too_long("flow_id", 100).await;
+    assert_field_too_long("flow_id", 50).await;
 }
 
 #[tokio::test]
@@ -710,4 +710,72 @@ async fn test_convenience_methods_set_correct_level() {
 
     client.disconnect().await.unwrap();
     mock.assert_async().await;
+}
+
+// ── Config validation ──
+
+#[tokio::test]
+#[should_panic(expected = "batch_size must be greater than 0")]
+async fn test_batch_size_zero_panics() {
+    TimberlogsClient::new(TimberlogsConfig {
+        batch_size: Some(0),
+        ..test_config("tb_test_key")
+    });
+}
+
+// ── No auto-flush without api_key ──
+
+#[tokio::test]
+async fn test_no_auto_flush_without_api_key() {
+    let mut client = TimberlogsClient::new(TimberlogsConfig {
+        api_key: String::new(),
+        flush_interval_ms: Some(50),
+        batch_size: Some(100),
+        ..Default::default()
+    });
+
+    // Should not panic or attempt to flush with empty api_key
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    client.disconnect().await.unwrap();
+}
+
+// ── Flow step index respects min_level ──
+
+#[tokio::test]
+async fn test_flow_step_index_skips_filtered_levels() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/logs")
+        .with_status(200)
+        .with_body(r#"{"success":true,"count":1}"#)
+        .create_async()
+        .await;
+
+    let _flow_mock = server
+        .mock("POST", "/v1/flows")
+        .with_status(200)
+        .with_body(r#"{"flowId":"f1","name":"test"}"#)
+        .create_async()
+        .await;
+
+    let client = TimberlogsClient::new(TimberlogsConfig {
+        min_level: Some(LogLevel::Warn),
+        batch_size: Some(100),
+        ..mock_config("tb_key", &server.url())
+    });
+
+    let mut flow = client.flow("test").await.unwrap();
+
+    // debug and info are below min_level — step index should NOT increment
+    flow.debug("filtered", None).await.unwrap();
+    flow.info("filtered", None).await.unwrap();
+
+    // warn passes — should get step_index 0 (not 2)
+    flow.warn("visible", None).await.unwrap();
+
+    // error passes — should get step_index 1 (not 3)
+    flow.error("also visible", None).await.unwrap();
+
+    // Verify step_index is 2 (only incremented for warn + error)
+    assert_eq!(flow.step_index(), 2);
 }
