@@ -43,6 +43,12 @@ pub struct LogEntry {
     pub step_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +80,12 @@ pub(crate) struct CreateLogArgs {
     pub step_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
