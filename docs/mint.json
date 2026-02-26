@@ -1,0 +1,11 @@
+{
+  "navigation": [
+    {
+      "group": "Rust SDK",
+      "pages": [
+        "sdks/rust",
+        "sdks/configuration"
+      ]
+    }
+  ]
+}
